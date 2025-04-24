@@ -12,12 +12,12 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAuth } from "@/context/auth-context"
-import { Eye, EyeOff, Key, ShieldCheck, Users } from "lucide-react"
+import { Eye, EyeOff, Key, ShieldCheck, Users, WifiOff, RefreshCw } from "lucide-react"
 import { initializeVerificationCodes, verifyCode } from "@/lib/verification-service"
 
 export default function AuthPage() {
   const router = useRouter()
-  const { user, loading, signIn, signUp, resetPassword, authStatus } = useAuth()
+  const { user, loading, signIn, signUp, resetPassword, authStatus, isOffline, retryConnection } = useAuth()
   const [activeTab, setActiveTab] = useState("login")
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
@@ -27,6 +27,7 @@ export default function AuthPage() {
   const [alert, setAlert] = useState<{ type: "success" | "error"; message: string } | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [redirected, setRedirected] = useState(false)
+  const [isRetrying, setIsRetrying] = useState(false)
 
   // Form states
   const [loginForm, setLoginForm] = useState({ email: "", password: "" })
@@ -63,6 +64,43 @@ export default function AuthPage() {
   useEffect(() => {
     initializeVerificationCodes()
   }, [])
+
+  // Handle offline status changes
+  useEffect(() => {
+    if (isOffline) {
+      setAlert({
+        type: "error",
+        message: "You appear to be offline. Some features may be limited.",
+      })
+    } else if (alert?.message === "You appear to be offline. Some features may be limited.") {
+      setAlert(null)
+    }
+  }, [isOffline, alert])
+
+  const handleRetryConnection = async () => {
+    setIsRetrying(true)
+    try {
+      const success = await retryConnection()
+      if (success) {
+        setAlert({
+          type: "success",
+          message: "Successfully reconnected to the server!",
+        })
+      } else {
+        setAlert({
+          type: "error",
+          message: "Failed to reconnect. Please check your internet connection.",
+        })
+      }
+    } catch (error) {
+      setAlert({
+        type: "error",
+        message: "Failed to reconnect. Please check your internet connection.",
+      })
+    } finally {
+      setIsRetrying(false)
+    }
+  }
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -208,6 +246,35 @@ export default function AuthPage() {
           Home
         </Link>
       </header>
+
+      {/* Offline Banner */}
+      {isOffline && (
+        <div className="bg-amber-100 text-amber-800 px-4 py-2 flex items-center justify-between">
+          <div className="flex items-center">
+            <WifiOff className="h-4 w-4 mr-2" />
+            <span>You are currently offline. Some features may be limited.</span>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRetryConnection}
+            disabled={isRetrying}
+            className="bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-200"
+          >
+            {isRetrying ? (
+              <>
+                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                Reconnecting...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Retry Connection
+              </>
+            )}
+          </Button>
+        </div>
+      )}
 
       {/* Auth Container */}
       <div className="flex-1 flex justify-center items-center p-4 md:p-8 bg-gray-50">

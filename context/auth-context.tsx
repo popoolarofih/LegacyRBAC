@@ -10,8 +10,10 @@ import {
   signOut as firebaseSignOut,
   onAuthStateChanged,
   sendPasswordResetEmail,
+  setPersistence,
+  browserLocalPersistence,
 } from "firebase/auth"
-import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore"
+import { doc, setDoc, getDoc, serverTimestamp, enableNetwork, disableNetwork } from "firebase/firestore"
 import { auth, db } from "@/lib/firebase"
 import { addAuditLog } from "@/lib/audit-service"
 
@@ -28,10 +30,12 @@ type AuthContextType = {
   user: User | null
   loading: boolean
   authStatus: "initializing" | "authenticated" | "unauthenticated"
+  isOffline: boolean
   signIn: (email: string, password: string) => Promise<void>
   signUp: (email: string, password: string, role: string) => Promise<void>
   signOut: () => Promise<void>
   resetPassword: (email: string) => Promise<void>
+  retryConnection: () => Promise<void>
 }
 
 // Create context with default values
@@ -39,10 +43,12 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
   authStatus: "initializing",
+  isOffline: false,
   signIn: async () => {},
   signUp: async () => {},
   signOut: async () => {},
   resetPassword: async () => {},
+  retryConnection: async () => {},
 })
 
 // Custom hook to use auth context
@@ -52,64 +58,125 @@ export const useAuth = () => useContext(AuthContext)
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
+  const [isOffline, setIsOffline] = useState(false)
   // Add a new state variable to track authentication status
   const [authStatus, setAuthStatus] = useState<"initializing" | "authenticated" | "unauthenticated">("initializing")
   const router = useRouter()
   const [isRedirecting, setIsRedirecting] = useState(false)
 
+  // Set up network status monitoring
+  useEffect(() => {
+    const handleOnline = () => {
+      console.log("App is online, enabling Firestore network")
+      enableNetwork(db).catch((err) => console.error("Error enabling network:", err))
+      setIsOffline(false)
+    }
+
+    const handleOffline = () => {
+      console.log("App is offline, disabling Firestore network")
+      disableNetwork(db).catch((err) => console.error("Error disabling network:", err))
+      setIsOffline(true)
+    }
+
+    // Check initial status
+    if (typeof window !== "undefined") {
+      setIsOffline(!window.navigator.onLine)
+    }
+
+    // Add event listeners
+    window.addEventListener("online", handleOnline)
+    window.addEventListener("offline", handleOffline)
+
+    return () => {
+      window.removeEventListener("online", handleOnline)
+      window.removeEventListener("offline", handleOffline)
+    }
+  }, [])
+
+  // Set up auth persistence
+  useEffect(() => {
+    setPersistence(auth, browserLocalPersistence).catch((error) => {
+      console.error("Error setting auth persistence:", error)
+    })
+  }, [])
+
+  // Function to retry connection
+  const retryConnection = async () => {
+    try {
+      console.log("Attempting to reconnect to Firestore...")
+      await enableNetwork(db)
+      setIsOffline(false)
+      return true
+    } catch (error) {
+      console.error("Failed to reconnect:", error)
+      setIsOffline(true)
+      return false
+    }
+  }
+
   // Listen for auth state changes
   useEffect(() => {
     console.log("Setting up auth state listener")
     let isMounted = true
+    const retryCount = 0
+    const MAX_RETRIES = 3
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       console.log("Auth state changed:", firebaseUser?.uid)
 
       try {
         if (firebaseUser) {
-          // Get user data from Firestore
-          const userDoc = await getDoc(doc(db, "users", firebaseUser.uid))
+          // Get user data from Firestore with retry logic
+          let userData = null
+          let error = null
+
+          for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            try {
+              const userDoc = await getDoc(doc(db, "users", firebaseUser.uid))
+              if (userDoc.exists()) {
+                userData = userDoc.data()
+                break
+              } else if (attempt === MAX_RETRIES - 1) {
+                // Create default user on last attempt if document doesn't exist
+                userData = {
+                  email: firebaseUser.email,
+                  role: "employee",
+                }
+              }
+            } catch (err) {
+              error = err
+              console.warn(`Firestore fetch attempt ${attempt + 1} failed:`, err)
+              // Wait before retrying
+              await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)))
+            }
+          }
+
+          if (!userData && error) {
+            console.error("All Firestore fetch attempts failed:", error)
+            // Fall back to basic user info from auth
+            userData = {
+              email: firebaseUser.email,
+              role: "employee",
+            }
+            setIsOffline(true)
+          }
 
           if (isMounted) {
-            if (userDoc.exists()) {
-              const userData = userDoc.data()
-              console.log("User data from Firestore:", userData)
+            console.log("Setting user with data:", userData)
+            setUser({
+              uid: firebaseUser.uid,
+              email: firebaseUser.email,
+              displayName: firebaseUser.displayName || userData.name,
+              role: userData.role || "employee",
+            })
 
-              // Ensure role is set, default to employee if not present
-              const userRole = userData.role || "employee"
-
-              setUser({
-                uid: firebaseUser.uid,
-                email: firebaseUser.email,
-                displayName: firebaseUser.displayName || userData.name,
-                role: userRole,
-              })
-
-              // Update last login timestamp
-              await updateLastLogin(firebaseUser.uid)
-            } else {
-              // If user document doesn't exist, create a default one
-              console.log("User document doesn't exist, creating default")
-              const defaultUser = {
-                uid: firebaseUser.uid,
-                email: firebaseUser.email,
-                displayName: firebaseUser.displayName,
-                role: "employee",
-              }
-              setUser(defaultUser)
-
-              // Save default user to Firestore
-              await setDoc(doc(db, "users", firebaseUser.uid), {
-                email: firebaseUser.email,
-                name: firebaseUser.displayName || firebaseUser.email?.split("@")[0],
-                role: "employee",
-                createdAt: serverTimestamp(),
-                lastLogin: serverTimestamp(),
-              })
-            }
-
-            // Set auth status to authenticated after user is set
+            // Set auth status to authenticated
             setAuthStatus("authenticated")
+
+            // Try to update last login timestamp, but don't block on it
+            updateLastLogin(firebaseUser.uid).catch((err) =>
+              console.warn("Failed to update last login timestamp:", err),
+            )
           }
         } else {
           console.log("No firebase user, setting user to null")
@@ -160,6 +227,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       )
     } catch (error) {
       console.error("Error updating last login:", error)
+      throw error
     }
   }
 
@@ -181,55 +249,63 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const firebaseUser = userCredential.user
       console.log("Sign in successful for user:", firebaseUser.uid)
 
-      // Log the sign in action
-      await addAuditLog({
+      // Try to log the sign in action, but don't block on it
+      addAuditLog({
         user: email,
         action: "Sign In",
         module: "Authentication",
         details: `User ${email} signed in`,
-      })
+      }).catch((err) => console.warn("Failed to add audit log:", err))
 
-      // Get user role from Firestore
-      const userDoc = await getDoc(doc(db, "users", firebaseUser.uid))
+      // Get user role from Firestore with retry logic
+      let userData = null
+      let error = null
+
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const userDoc = await getDoc(doc(db, "users", firebaseUser.uid))
+          if (userDoc.exists()) {
+            userData = userDoc.data()
+            break
+          }
+        } catch (err) {
+          error = err
+          console.warn(`Firestore fetch attempt ${attempt + 1} failed:`, err)
+          await new Promise((resolve) => setTimeout(resolve, 1000))
+        }
+      }
+
       let role = "employee" // Default role
 
-      if (userDoc.exists()) {
-        const userData = userDoc.data()
+      if (userData) {
         role = userData.role || "employee"
         console.log("User role from Firestore:", role)
-
-        // Update user state manually to ensure it's set before redirect
-        setUser({
-          uid: firebaseUser.uid,
-          email: firebaseUser.email,
-          displayName: firebaseUser.displayName || userData.name,
-          role: role,
-        })
-
-        // Set auth status to authenticated
-        setAuthStatus("authenticated")
       } else {
-        console.log("User document not found, creating default with employee role")
-        // Create default user document
-        await setDoc(doc(db, "users", firebaseUser.uid), {
-          email: firebaseUser.email,
-          role: "employee",
-          createdAt: serverTimestamp(),
-          lastLogin: serverTimestamp(),
-          status: "active",
-        })
-
-        // Set user with default role
-        setUser({
-          uid: firebaseUser.uid,
-          email: firebaseUser.email,
-          displayName: firebaseUser.displayName,
-          role: "employee",
-        })
-
-        // Set auth status to authenticated
-        setAuthStatus("authenticated")
+        console.log("User document not found or offline, creating default and using employee role")
+        // Create default user document when back online
+        try {
+          await setDoc(doc(db, "users", firebaseUser.uid), {
+            email: firebaseUser.email,
+            role: "employee",
+            createdAt: serverTimestamp(),
+            lastLogin: serverTimestamp(),
+            status: "active",
+          })
+        } catch (err) {
+          console.warn("Failed to create default user document:", err)
+        }
       }
+
+      // Update user state manually to ensure it's set before redirect
+      setUser({
+        uid: firebaseUser.uid,
+        email: firebaseUser.email,
+        displayName: firebaseUser.displayName || userData?.name,
+        role: role,
+      })
+
+      // Set auth status to authenticated
+      setAuthStatus("authenticated")
 
       // Wait a moment to ensure state is updated
       await new Promise((resolve) => setTimeout(resolve, 500))
@@ -272,14 +348,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const firebaseUser = userCredential.user
       console.log("Sign up successful for user:", firebaseUser.uid)
 
-      // Save user data to Firestore
-      await setDoc(doc(db, "users", firebaseUser.uid), {
-        email: firebaseUser.email,
-        role: role,
-        createdAt: serverTimestamp(),
-        lastLogin: serverTimestamp(),
-        status: "active",
-      })
+      // Try to save user data to Firestore
+      try {
+        await setDoc(doc(db, "users", firebaseUser.uid), {
+          email: firebaseUser.email,
+          role: role,
+          createdAt: serverTimestamp(),
+          lastLogin: serverTimestamp(),
+          status: "active",
+        })
+      } catch (err) {
+        console.warn("Failed to save user data to Firestore:", err)
+        // Continue anyway since we have the auth user
+      }
 
       // Update user state manually to ensure it's set before redirect
       setUser({
@@ -292,13 +373,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Set auth status to authenticated
       setAuthStatus("authenticated")
 
-      // Log the sign up action
-      await addAuditLog({
+      // Try to log the sign up action, but don't block on it
+      addAuditLog({
         user: email,
         action: "Sign Up",
         module: "Authentication",
         details: `New user ${email} registered with role ${role}`,
-      })
+      }).catch((err) => console.warn("Failed to add audit log:", err))
 
       // Wait a moment to ensure state is updated
       await new Promise((resolve) => setTimeout(resolve, 500))
@@ -326,13 +407,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = async () => {
     try {
       if (user?.email) {
-        // Log the sign out action
-        await addAuditLog({
+        // Try to log the sign out action, but don't block on it
+        addAuditLog({
           user: user.email,
           action: "Sign Out",
           module: "Authentication",
           details: `User ${user.email} signed out`,
-        })
+        }).catch((err) => console.warn("Failed to add audit log:", err))
       }
 
       console.log("Signing out")
@@ -352,28 +433,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await sendPasswordResetEmail(auth, email)
       console.log("Password reset email sent successfully")
 
-      // Log the password reset action
-      await addAuditLog({
+      // Try to log the password reset action, but don't block on it
+      addAuditLog({
         user: email,
         action: "Password Reset",
         module: "Authentication",
         details: `Password reset requested for ${email}`,
-      })
+      }).catch((err) => console.warn("Failed to add audit log:", err))
     } catch (error: any) {
       console.error("Password reset error:", error)
       throw new Error(error.message || "Failed to send password reset email")
     }
   }
 
-  // Update the value object to include authStatus
+  // Update the value object to include isOffline and retryConnection
   const value = {
     user,
     loading,
     authStatus,
+    isOffline,
     signIn,
     signUp,
     signOut,
     resetPassword,
+    retryConnection,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

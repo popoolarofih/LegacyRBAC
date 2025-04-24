@@ -31,7 +31,7 @@ export default function Home() {
             </h1>
             <p className="text-gray-600 mb-6 text-lg">
               AccessGuard provides enterprise-grade RBAC solutions that streamline permissions management, enhance
-              security, and ensure compliance—all through an intuitive interface.
+              security, and ensure compliance all through an intuitive interface.
             </p>
             <Button asChild size="lg" className="bg-[hsl(var(--deep-blue))] hover:bg-[hsl(var(--deep-blue))/90]">
               <Link href="/auth">
@@ -42,7 +42,7 @@ export default function Home() {
           </div>
           <div className="w-full lg:w-1/2 p-4 flex justify-center">
             <div className="rounded-lg shadow-xl overflow-hidden">
-              <img src="/placeholder.svg?height=400&width=600" alt="RBAC Dashboard Mockup" className="w-full h-auto" />
+              <img src="https://rbacindb.vercel.app/images/das.png" alt="RBAC Dashboard Mockup" className="w-full h-auto" />
             </div>
           </div>
         </div>
@@ -111,7 +111,7 @@ export default function Home() {
           <div className="w-full lg:w-1/2 p-4 flex justify-center">
             <div className="rounded-lg shadow-xl overflow-hidden">
               <img
-                src="/placeholder.svg?height=400&width=600"
+                src="https://rbacindb.vercel.app/images/usermanagement.png"
                 alt="RBAC Security Dashboard"
                 className="w-full h-auto"
               />

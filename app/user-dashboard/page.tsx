@@ -48,8 +48,6 @@ import {
   getDocs,
   query,
   where,
-  orderBy,
-  limit,
   addDoc,
   updateDoc,
   doc,
@@ -232,8 +230,8 @@ export default function UserDashboard() {
 
   const fetchTasks = async (userId: string) => {
     try {
-      // Get all tasks
-      const tasksQuery = query(collection(db, "tasks"), where("assignedTo", "==", userId), orderBy("dueDate"))
+      // Get all tasks for the user without ordering in the query
+      const tasksQuery = query(collection(db, "tasks"), where("assignedTo", "==", userId))
       const tasksSnapshot = await getDocs(tasksQuery)
 
       const tasksList: Task[] = []
@@ -264,6 +262,9 @@ export default function UserDashboard() {
         tasksList.push(task)
       })
 
+      // Sort tasks by dueDate client-side
+      tasksList.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())
+
       setTasks(tasksList)
       setStats({
         totalTasks: tasksList.length,
@@ -279,12 +280,7 @@ export default function UserDashboard() {
 
   const fetchNotifications = async (userId: string) => {
     try {
-      const notificationsQuery = query(
-        collection(db, "notifications"),
-        where("userId", "==", userId),
-        orderBy("timestamp", "desc"),
-        limit(5),
-      )
+      const notificationsQuery = query(collection(db, "notifications"), where("userId", "==", userId))
       const notificationsSnapshot = await getDocs(notificationsQuery)
 
       const notificationsList: Notification[] = []
@@ -300,7 +296,11 @@ export default function UserDashboard() {
         })
       })
 
-      setNotifications(notificationsList)
+      // Sort notifications by timestamp client-side (newest first)
+      notificationsList.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+
+      // Limit to 5 notifications after sorting
+      setNotifications(notificationsList.slice(0, 5))
     } catch (error) {
       console.error("Error fetching notifications:", error)
       throw error
@@ -309,12 +309,7 @@ export default function UserDashboard() {
 
   const fetchDocuments = async (userId: string) => {
     try {
-      const documentsQuery = query(
-        collection(db, "documents"),
-        where("userId", "==", userId),
-        orderBy("lastModified", "desc"),
-        limit(5),
-      )
+      const documentsQuery = query(collection(db, "documents"), where("userId", "==", userId))
       const documentsSnapshot = await getDocs(documentsQuery)
 
       const documentsList: Document[] = []
@@ -329,41 +324,50 @@ export default function UserDashboard() {
         })
       })
 
-      setDocuments(documentsList)
+      // Sort documents by lastModified date client-side (newest first)
+      documentsList.sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime())
+
+      // Limit to 5 documents after sorting
+      setDocuments(documentsList.slice(0, 5))
     } catch (error) {
       console.error("Error fetching documents:", error)
       throw error
     }
   }
 
+  // Fix the fetchEvents function to avoid requiring a composite index
   const fetchEvents = async (userId: string) => {
     try {
       // Get current date at midnight
       const today = new Date()
       today.setHours(0, 0, 0, 0)
 
-      const eventsQuery = query(
-        collection(db, "events"),
-        where("userId", "==", userId),
-        where("date", ">=", today),
-        orderBy("date"),
-        limit(5),
-      )
+      // Query only by userId, without the date filter
+      const eventsQuery = query(collection(db, "events"), where("userId", "==", userId))
       const eventsSnapshot = await getDocs(eventsQuery)
 
       const eventsList: Event[] = []
       eventsSnapshot.forEach((doc) => {
         const data = doc.data()
-        eventsList.push({
-          id: doc.id,
-          title: data.title || "",
-          date: data.date?.toDate() || new Date(),
-          type: data.type || "",
-          location: data.location,
-        })
+        const eventDate = data.date?.toDate() || new Date()
+
+        // Only include events that are today or in the future (client-side filtering)
+        if (eventDate >= today) {
+          eventsList.push({
+            id: doc.id,
+            title: data.title || "",
+            date: eventDate,
+            type: data.type || "",
+            location: data.location,
+          })
+        }
       })
 
-      setEvents(eventsList)
+      // Sort events by date client-side
+      eventsList.sort((a, b) => a.date.getTime() - b.date.getTime())
+
+      // Limit to 5 events after sorting
+      setEvents(eventsList.slice(0, 5))
     } catch (error) {
       console.error("Error fetching events:", error)
       throw error
@@ -372,11 +376,7 @@ export default function UserDashboard() {
 
   const fetchRequests = async (userId: string) => {
     try {
-      const requestsQuery = query(
-        collection(db, "requests"),
-        where("userId", "==", userId),
-        orderBy("createdAt", "desc"),
-      )
+      const requestsQuery = query(collection(db, "requests"), where("userId", "==", userId))
       const requestsSnapshot = await getDocs(requestsQuery)
 
       const requestsList: Request[] = []
@@ -391,6 +391,9 @@ export default function UserDashboard() {
           response: data.response,
         })
       })
+
+      // Sort requests by createdAt date client-side (newest first)
+      requestsList.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
 
       setRequests(requestsList)
     } catch (error) {
@@ -945,416 +948,428 @@ export default function UserDashboard() {
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="requests">Requests</TabsTrigger>
         </TabsList>
-      </Tabs>
 
-      {/* Overview Tab */}
-      <TabsContent value="overview" className="space-y-6">
-        {/* Statistics */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          <StatCard title="Total Tasks" value={stats.totalTasks} icon={<ListTodo className="h-6 w-6 text-primary" />} />
-          <StatCard
-            title="Completed Tasks"
-            value={stats.completedTasks}
-            icon={<CheckCircle className="h-6 w-6 text-green-500" />}
-          />
-          <StatCard
-            title="Pending Tasks"
-            value={stats.pendingTasks}
-            icon={<Clock className="h-6 w-6 text-yellow-500" />}
-          />
-          <StatCard
-            title="Overdue Tasks"
-            value={stats.overdueTasks}
-            icon={<AlertCircle className="h-6 w-6 text-red-500" />}
-          />
-        </div>
+        {/* Overview Tab */}
+        <TabsContent value="overview" className="space-y-6">
+          {/* Statistics */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            <StatCard
+              title="Total Tasks"
+              value={stats.totalTasks}
+              icon={<ListTodo className="h-6 w-6 text-primary" />}
+            />
+            <StatCard
+              title="Completed Tasks"
+              value={stats.completedTasks}
+              icon={<CheckCircle className="h-6 w-6 text-green-500" />}
+            />
+            <StatCard
+              title="Pending Tasks"
+              value={stats.pendingTasks}
+              icon={<Clock className="h-6 w-6 text-yellow-500" />}
+            />
+            <StatCard
+              title="Overdue Tasks"
+              value={stats.overdueTasks}
+              icon={<AlertCircle className="h-6 w-6 text-red-500" />}
+            />
+          </div>
 
-        {/* Recent Tasks and Notifications */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Recent Tasks */}
+          {/* Recent Tasks and Notifications */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Recent Tasks */}
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex justify-between items-center">
+                  <CardTitle>Recent Tasks</CardTitle>
+                  <Button variant="ghost" size="sm" onClick={() => setActiveTab("tasks")}>
+                    View All <ChevronRight className="ml-1 h-4 w-4" />
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {tasks.length === 0 ? (
+                  <p className="text-muted-foreground text-center py-4">No tasks found</p>
+                ) : (
+                  <div className="space-y-4">
+                    {tasks.slice(0, 3).map((task) => (
+                      <div key={task.id} className="flex items-start justify-between border-b pb-3">
+                        <div>
+                          <h4 className="font-medium">{task.title}</h4>
+                          <p className="text-sm text-muted-foreground">{task.description}</p>
+                          <div className="flex gap-2 mt-1">
+                            {getStatusBadge(task.status)}
+                            {getPriorityBadge(task.priority)}
+                          </div>
+                        </div>
+                        <div className="text-sm text-muted-foreground">Due: {formatDate(task.dueDate)}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Notifications */}
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex justify-between items-center">
+                  <CardTitle>Notifications</CardTitle>
+                  <Button variant="ghost" size="sm" onClick={handleMarkAllNotificationsAsRead}>
+                    Mark All Read
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {notifications.length === 0 ? (
+                  <p className="text-muted-foreground text-center py-4">No notifications</p>
+                ) : (
+                  <div className="space-y-4">
+                    {notifications.map((notification) => (
+                      <div key={notification.id} className="flex gap-3 border-b pb-3">
+                        <div className="mt-0.5">{getNotificationIcon(notification.type)}</div>
+                        <div className="flex-1">
+                          <h4 className={`font-medium ${notification.read ? "text-muted-foreground" : ""}`}>
+                            {notification.title}
+                          </h4>
+                          <p className="text-sm text-muted-foreground">{notification.message}</p>
+                          <p className="text-xs text-muted-foreground mt-1">{formatDate(notification.timestamp)}</p>
+                        </div>
+                        {!notification.read && <div className="w-2 h-2 rounded-full bg-blue-500 mt-2"></div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Upcoming Events and Performance */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Upcoming Events */}
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex justify-between items-center">
+                  <CardTitle>Upcoming Events</CardTitle>
+                  <Button variant="ghost" size="sm" onClick={() => setActiveTab("calendar")}>
+                    View Calendar <ChevronRight className="ml-1 h-4 w-4" />
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {events.length === 0 ? (
+                  <p className="text-muted-foreground text-center py-4">No upcoming events</p>
+                ) : (
+                  <div className="space-y-4">
+                    {events.map((event) => (
+                      <div key={event.id} className="flex items-start justify-between border-b pb-3">
+                        <div>
+                          <h4 className="font-medium">{event.title}</h4>
+                          <p className="text-sm text-muted-foreground">{event.type}</p>
+                          {event.location && (
+                            <p className="text-xs text-muted-foreground">Location: {event.location}</p>
+                          )}
+                        </div>
+                        <div className="text-sm font-medium">{formatDate(event.date)}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Performance Metrics */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Performance Metrics</CardTitle>
+                <CardDescription>Your current performance indicators</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-sm font-medium">Task Completion Rate</span>
+                    <span className="text-sm font-medium">
+                      {stats.totalTasks > 0 ? Math.round((stats.completedTasks / stats.totalTasks) * 100) : 0}%
+                    </span>
+                  </div>
+                  <Progress
+                    value={stats.totalTasks > 0 ? (stats.completedTasks / stats.totalTasks) * 100 : 0}
+                    className="h-2"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-sm font-medium">On-time Delivery</span>
+                    <span className="text-sm font-medium">
+                      {stats.totalTasks > 0
+                        ? Math.round(((stats.totalTasks - stats.overdueTasks) / stats.totalTasks) * 100)
+                        : 0}
+                      %
+                    </span>
+                  </div>
+                  <Progress
+                    value={
+                      stats.totalTasks > 0 ? ((stats.totalTasks - stats.overdueTasks) / stats.totalTasks) * 100 : 0
+                    }
+                    className="h-2"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-sm font-medium">Team Collaboration</span>
+                    <span className="text-sm font-medium">85%</span>
+                  </div>
+                  <Progress value={85} className="h-2" />
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* Tasks Tab */}
+        <TabsContent value="tasks" className="space-y-6">
           <Card>
-            <CardHeader className="pb-3">
+            <CardHeader>
               <div className="flex justify-between items-center">
-                <CardTitle>Recent Tasks</CardTitle>
-                <Button variant="ghost" size="sm" onClick={() => setActiveTab("tasks")}>
-                  View All <ChevronRight className="ml-1 h-4 w-4" />
-                </Button>
+                <CardTitle>My Tasks</CardTitle>
+                <div className="flex gap-2">
+                  <div className="relative w-64">
+                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search tasks..."
+                      className="pl-8"
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                    />
+                  </div>
+                  <Button onClick={() => setIsTaskDialogOpen(true)}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    New Task
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
-              {tasks.length === 0 ? (
-                <p className="text-muted-foreground text-center py-4">No tasks found</p>
+              {filteredTasks.length === 0 ? (
+                <p className="text-muted-foreground text-center py-4">
+                  {searchTerm ? "No matching tasks found" : "No tasks found"}
+                </p>
               ) : (
                 <div className="space-y-4">
-                  {tasks.slice(0, 3).map((task) => (
-                    <div key={task.id} className="flex items-start justify-between border-b pb-3">
-                      <div>
+                  {filteredTasks.map((task) => (
+                    <div key={task.id} className="flex items-start justify-between border-b pb-4">
+                      <div className="space-y-1">
                         <h4 className="font-medium">{task.title}</h4>
                         <p className="text-sm text-muted-foreground">{task.description}</p>
-                        <div className="flex gap-2 mt-1">
+                        <div className="flex gap-2 mt-2">
                           {getStatusBadge(task.status)}
                           {getPriorityBadge(task.priority)}
                         </div>
                       </div>
-                      <div className="text-sm text-muted-foreground">Due: {formatDate(task.dueDate)}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Notifications */}
-          <Card>
-            <CardHeader className="pb-3">
-              <div className="flex justify-between items-center">
-                <CardTitle>Notifications</CardTitle>
-                <Button variant="ghost" size="sm" onClick={handleMarkAllNotificationsAsRead}>
-                  Mark All Read
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {notifications.length === 0 ? (
-                <p className="text-muted-foreground text-center py-4">No notifications</p>
-              ) : (
-                <div className="space-y-4">
-                  {notifications.map((notification) => (
-                    <div key={notification.id} className="flex gap-3 border-b pb-3">
-                      <div className="mt-0.5">{getNotificationIcon(notification.type)}</div>
-                      <div className="flex-1">
-                        <h4 className={`font-medium ${notification.read ? "text-muted-foreground" : ""}`}>
-                          {notification.title}
-                        </h4>
-                        <p className="text-sm text-muted-foreground">{notification.message}</p>
-                        <p className="text-xs text-muted-foreground mt-1">{formatDate(notification.timestamp)}</p>
+                      <div className="text-right">
+                        <div className="text-sm font-medium">Due: {formatDate(task.dueDate)}</div>
+                        <div className="flex gap-2 mt-2">
+                          {task.status !== "completed" && (
+                            <Button variant="outline" size="sm" onClick={() => handleCompleteTask(task.id)}>
+                              <CheckCircle className="mr-1 h-4 w-4" />
+                              Complete
+                            </Button>
+                          )}
+                          <Button variant="outline" size="sm">
+                            <Eye className="mr-1 h-4 w-4" />
+                            View
+                          </Button>
+                        </div>
                       </div>
-                      {!notification.read && <div className="w-2 h-2 rounded-full bg-blue-500 mt-2"></div>}
                     </div>
                   ))}
                 </div>
               )}
             </CardContent>
           </Card>
-        </div>
+        </TabsContent>
 
-        {/* Upcoming Events and Performance */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Upcoming Events */}
-          <Card>
-            <CardHeader className="pb-3">
-              <div className="flex justify-between items-center">
-                <CardTitle>Upcoming Events</CardTitle>
-                <Button variant="ghost" size="sm" onClick={() => setActiveTab("calendar")}>
-                  View Calendar <ChevronRight className="ml-1 h-4 w-4" />
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {events.length === 0 ? (
-                <p className="text-muted-foreground text-center py-4">No upcoming events</p>
-              ) : (
-                <div className="space-y-4">
-                  {events.map((event) => (
-                    <div key={event.id} className="flex items-start justify-between border-b pb-3">
-                      <div>
-                        <h4 className="font-medium">{event.title}</h4>
-                        <p className="text-sm text-muted-foreground">{event.type}</p>
-                        {event.location && <p className="text-xs text-muted-foreground">Location: {event.location}</p>}
-                      </div>
-                      <div className="text-sm font-medium">{formatDate(event.date)}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Performance Metrics */}
+        {/* Calendar Tab */}
+        <TabsContent value="calendar" className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Performance Metrics</CardTitle>
-              <CardDescription>Your current performance indicators</CardDescription>
+              <div className="flex justify-between items-center">
+                <CardTitle>Calendar</CardTitle>
+                <div className="flex gap-2">
+                  <div className="relative w-64">
+                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search events..."
+                      className="pl-8"
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                    />
+                  </div>
+                  <Button onClick={() => setIsEventDialogOpen(true)}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Add Event
+                  </Button>
+                </div>
+              </div>
             </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-sm font-medium">Task Completion Rate</span>
-                  <span className="text-sm font-medium">
-                    {stats.totalTasks > 0 ? Math.round((stats.completedTasks / stats.totalTasks) * 100) : 0}%
-                  </span>
-                </div>
-                <Progress
-                  value={stats.totalTasks > 0 ? (stats.completedTasks / stats.totalTasks) * 100 : 0}
-                  className="h-2"
-                />
+            <CardContent>
+              <div className="text-center py-8">
+                <Calendar className="h-16 w-16 mx-auto text-primary mb-4" />
+                <h3 className="text-lg font-medium">Calendar View Coming Soon</h3>
+                <p className="text-muted-foreground">
+                  We're working on a full calendar view for your events and deadlines.
+                </p>
               </div>
 
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-sm font-medium">On-time Delivery</span>
-                  <span className="text-sm font-medium">
-                    {stats.totalTasks > 0
-                      ? Math.round(((stats.totalTasks - stats.overdueTasks) / stats.totalTasks) * 100)
-                      : 0}
-                    %
-                  </span>
-                </div>
-                <Progress
-                  value={stats.totalTasks > 0 ? ((stats.totalTasks - stats.overdueTasks) / stats.totalTasks) * 100 : 0}
-                  className="h-2"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-sm font-medium">Team Collaboration</span>
-                  <span className="text-sm font-medium">85%</span>
-                </div>
-                <Progress value={85} className="h-2" />
+              <div className="mt-6">
+                <h4 className="font-medium mb-4">Upcoming Events</h4>
+                {filteredEvents.length === 0 ? (
+                  <p className="text-muted-foreground text-center py-4">
+                    {searchTerm ? "No matching events found" : "No upcoming events"}
+                  </p>
+                ) : (
+                  <div className="space-y-4">
+                    {filteredEvents.map((event) => (
+                      <div key={event.id} className="flex items-start justify-between border-b pb-4">
+                        <div>
+                          <h4 className="font-medium">{event.title}</h4>
+                          <p className="text-sm text-muted-foreground">{event.type}</p>
+                          {event.location && (
+                            <p className="text-xs text-muted-foreground">Location: {event.location}</p>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-medium">{formatDate(event.date)}</div>
+                          <Button variant="outline" size="sm" className="mt-2">
+                            <Eye className="mr-1 h-4 w-4" />
+                            View Details
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
-        </div>
-      </TabsContent>
+        </TabsContent>
 
-      {/* Tasks Tab */}
-      <TabsContent value="tasks" className="space-y-6">
-        <Card>
-          <CardHeader>
-            <div className="flex justify-between items-center">
-              <CardTitle>My Tasks</CardTitle>
-              <div className="flex gap-2">
-                <div className="relative w-64">
-                  <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search tasks..."
-                    className="pl-8"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
-                </div>
-                <Button onClick={() => setIsTaskDialogOpen(true)}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  New Task
-                </Button>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {filteredTasks.length === 0 ? (
-              <p className="text-muted-foreground text-center py-4">
-                {searchTerm ? "No matching tasks found" : "No tasks found"}
-              </p>
-            ) : (
-              <div className="space-y-4">
-                {filteredTasks.map((task) => (
-                  <div key={task.id} className="flex items-start justify-between border-b pb-4">
-                    <div className="space-y-1">
-                      <h4 className="font-medium">{task.title}</h4>
-                      <p className="text-sm text-muted-foreground">{task.description}</p>
-                      <div className="flex gap-2 mt-2">
-                        {getStatusBadge(task.status)}
-                        {getPriorityBadge(task.priority)}
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm font-medium">Due: {formatDate(task.dueDate)}</div>
-                      <div className="flex gap-2 mt-2">
-                        {task.status !== "completed" && (
-                          <Button variant="outline" size="sm" onClick={() => handleCompleteTask(task.id)}>
-                            <CheckCircle className="mr-1 h-4 w-4" />
-                            Complete
-                          </Button>
-                        )}
-                        <Button variant="outline" size="sm">
-                          <Eye className="mr-1 h-4 w-4" />
-                          View
-                        </Button>
-                      </div>
-                    </div>
+        {/* Documents Tab */}
+        <TabsContent value="documents" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <div className="flex justify-between items-center">
+                <CardTitle>My Documents</CardTitle>
+                <div className="flex gap-2">
+                  <div className="relative w-64">
+                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search documents..."
+                      className="pl-8"
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                    />
                   </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </TabsContent>
-
-      {/* Calendar Tab */}
-      <TabsContent value="calendar" className="space-y-6">
-        <Card>
-          <CardHeader>
-            <div className="flex justify-between items-center">
-              <CardTitle>Calendar</CardTitle>
-              <div className="flex gap-2">
-                <div className="relative w-64">
-                  <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search events..."
-                    className="pl-8"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
+                  <Button onClick={() => setIsDocumentUploadDialogOpen(true)}>
+                    <Upload className="mr-2 h-4 w-4" />
+                    Upload Document
+                  </Button>
                 </div>
-                <Button onClick={() => setIsEventDialogOpen(true)}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add Event
-                </Button>
               </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-center py-8">
-              <Calendar className="h-16 w-16 mx-auto text-primary mb-4" />
-              <h3 className="text-lg font-medium">Calendar View Coming Soon</h3>
-              <p className="text-muted-foreground">
-                We're working on a full calendar view for your events and deadlines.
-              </p>
-            </div>
-
-            <div className="mt-6">
-              <h4 className="font-medium mb-4">Upcoming Events</h4>
-              {filteredEvents.length === 0 ? (
+            </CardHeader>
+            <CardContent>
+              {filteredDocuments.length === 0 ? (
                 <p className="text-muted-foreground text-center py-4">
-                  {searchTerm ? "No matching events found" : "No upcoming events"}
+                  {searchTerm ? "No matching documents found" : "No documents found"}
                 </p>
               ) : (
                 <div className="space-y-4">
-                  {filteredEvents.map((event) => (
-                    <div key={event.id} className="flex items-start justify-between border-b pb-4">
-                      <div>
-                        <h4 className="font-medium">{event.title}</h4>
-                        <p className="text-sm text-muted-foreground">{event.type}</p>
-                        {event.location && <p className="text-xs text-muted-foreground">Location: {event.location}</p>}
+                  {filteredDocuments.map((doc) => (
+                    <div key={doc.id} className="flex items-center justify-between border-b pb-4">
+                      <div className="flex items-center">
+                        <FileText className="h-8 w-8 text-primary mr-3" />
+                        <div>
+                          <h4 className="font-medium">{doc.title}</h4>
+                          <p className="text-xs text-muted-foreground">
+                            {doc.type} • {doc.size}
+                          </p>
+                        </div>
                       </div>
                       <div className="text-right">
-                        <div className="text-sm font-medium">{formatDate(event.date)}</div>
-                        <Button variant="outline" size="sm" className="mt-2">
-                          <Eye className="mr-1 h-4 w-4" />
-                          View Details
-                        </Button>
+                        <div className="text-sm text-muted-foreground mb-2">
+                          Modified: {formatDate(doc.lastModified)}
+                        </div>
+                        <div className="flex gap-2">
+                          <Button variant="outline" size="sm">
+                            <Eye className="mr-1 h-4 w-4" />
+                            View
+                          </Button>
+                          <Button variant="outline" size="sm">
+                            <Download className="mr-1 h-4 w-4" />
+                            Download
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-red-500 hover:text-red-700"
+                            onClick={() => handleDeleteDocument(doc.id)}
+                          >
+                            <Trash2 className="mr-1 h-4 w-4" />
+                            Delete
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
-            </div>
-          </CardContent>
-        </Card>
-      </TabsContent>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-      {/* Documents Tab */}
-      <TabsContent value="documents" className="space-y-6">
-        <Card>
-          <CardHeader>
-            <div className="flex justify-between items-center">
-              <CardTitle>My Documents</CardTitle>
-              <div className="flex gap-2">
-                <div className="relative w-64">
-                  <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search documents..."
-                    className="pl-8"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
-                </div>
-                <Button onClick={() => setIsDocumentUploadDialogOpen(true)}>
-                  <Upload className="mr-2 h-4 w-4" />
-                  Upload Document
+        {/* Requests Tab */}
+        <TabsContent value="requests" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <div className="flex justify-between items-center">
+                <CardTitle>My Requests</CardTitle>
+                <Button onClick={() => setIsRequestDialogOpen(true)}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  New Request
                 </Button>
               </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {filteredDocuments.length === 0 ? (
-              <p className="text-muted-foreground text-center py-4">
-                {searchTerm ? "No matching documents found" : "No documents found"}
-              </p>
-            ) : (
-              <div className="space-y-4">
-                {filteredDocuments.map((doc) => (
-                  <div key={doc.id} className="flex items-center justify-between border-b pb-4">
-                    <div className="flex items-center">
-                      <FileText className="h-8 w-8 text-primary mr-3" />
-                      <div>
-                        <h4 className="font-medium">{doc.title}</h4>
-                        <p className="text-xs text-muted-foreground">
-                          {doc.type} • {doc.size}
-                        </p>
+            </CardHeader>
+            <CardContent>
+              {requests.length === 0 ? (
+                <p className="text-muted-foreground text-center py-4">No requests found</p>
+              ) : (
+                <div className="space-y-4">
+                  {requests.map((request) => (
+                    <div key={request.id} className="flex items-start justify-between border-b pb-4">
+                      <div className="space-y-1">
+                        <h4 className="font-medium">{request.type}</h4>
+                        <p className="text-sm text-muted-foreground">{request.description}</p>
+                        <div className="flex gap-2 mt-2">{getStatusBadge(request.status)}</div>
+                        {request.response && (
+                          <div className="mt-2 p-2 bg-gray-50 rounded-md">
+                            <p className="text-sm font-medium">Response:</p>
+                            <p className="text-sm text-muted-foreground">{request.response}</p>
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-right">
+                        <div className="text-sm font-medium">Submitted: {formatDate(request.createdAt)}</div>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-sm text-muted-foreground mb-2">Modified: {formatDate(doc.lastModified)}</div>
-                      <div className="flex gap-2">
-                        <Button variant="outline" size="sm">
-                          <Eye className="mr-1 h-4 w-4" />
-                          View
-                        </Button>
-                        <Button variant="outline" size="sm">
-                          <Download className="mr-1 h-4 w-4" />
-                          Download
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="text-red-500 hover:text-red-700"
-                          onClick={() => handleDeleteDocument(doc.id)}
-                        >
-                          <Trash2 className="mr-1 h-4 w-4" />
-                          Delete
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </TabsContent>
-
-      {/* Requests Tab */}
-      <TabsContent value="requests" className="space-y-6">
-        <Card>
-          <CardHeader>
-            <div className="flex justify-between items-center">
-              <CardTitle>My Requests</CardTitle>
-              <Button onClick={() => setIsRequestDialogOpen(true)}>
-                <Plus className="mr-2 h-4 w-4" />
-                New Request
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {requests.length === 0 ? (
-              <p className="text-muted-foreground text-center py-4">No requests found</p>
-            ) : (
-              <div className="space-y-4">
-                {requests.map((request) => (
-                  <div key={request.id} className="flex items-start justify-between border-b pb-4">
-                    <div className="space-y-1">
-                      <h4 className="font-medium">{request.type}</h4>
-                      <p className="text-sm text-muted-foreground">{request.description}</p>
-                      <div className="flex gap-2 mt-2">{getStatusBadge(request.status)}</div>
-                      {request.response && (
-                        <div className="mt-2 p-2 bg-gray-50 rounded-md">
-                          <p className="text-sm font-medium">Response:</p>
-                          <p className="text-sm text-muted-foreground">{request.response}</p>
-                        </div>
-                      )}
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm font-medium">Submitted: {formatDate(request.createdAt)}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </TabsContent>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
       {/* Quick Actions */}
       <div className="mt-6">
