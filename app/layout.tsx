@@ -9,7 +9,7 @@ const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
   title: "AccessGuard - RBAC Management System",
-  description: "Enterprise-grade RBAC solutions that streamline permissions management",
+  description: "Enterprise grade RBAC solutions that streamline permissions management",
     generator: 'v0.dev'
 }
 
