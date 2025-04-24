@@ -133,12 +133,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   label="My Tasks"
                   active={pathname === "/my-tasks"}
                 />
-                <NavItem
-                  href="/my-profile"
-                  icon={<User className="h-5 w-5" />}
-                  label="My Profile"
-                  active={pathname === "/my-profile"}
-                />
+                
               </>
             )}
 
